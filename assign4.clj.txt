@@ -1,0 +1,319 @@
+;; To run the program, 
+;; 1-load in lein REPl
+;; 2-call function (readMoves)
+;; NOTE: (readMoves) doesn't input error check only valid commands such as "Q", "d2 S", "d2 S 7", etc.
+
+(use '[clojure.string :only (join split)])
+
+;; initial chess board 
+(def ChessBoard (ref [
+{:p "a8" :v "r"} {:p "b8" :v "n"} {:p "c8" :v "b"} {:p "d8" :v "q"} 
+{:p "e8" :v "k"} {:p "f8" :v "b"} {:p "g8" :v "n"} {:p "h8" :v "r"}
+{:p "a7" :v "p"} {:p "b7" :v "p"} {:p "c7" :v "p"} {:p "d7" :v "p"}
+{:p "e7" :v "p"} {:p "f7" :v "p"} {:p "g7" :v "p"} {:p "h7" :v "p"} 
+{:p "a6" :v " "} {:p "b6" :v " "} {:p "c6" :v " "} {:p "d6" :v " "}
+{:p "e6" :v " "} {:p "f6" :v " "} {:p "g6" :v " "} {:p "h6" :v " "} 
+{:p "a5" :v " "} {:p "b5" :v " "} {:p "c5" :v " "} {:p "d5" :v " "}
+{:p "e5" :v " "} {:p "f5" :v " "} {:p "g5" :v " "} {:p "h5" :v " "} 
+{:p "a4" :v " "} {:p "b4" :v " "} {:p "c4" :v " "} {:p "d4" :v " "}
+{:p "e4" :v " "} {:p "f4" :v " "} {:p "g4" :v " "} {:p "h4" :v " "} 
+{:p "a3" :v " "} {:p "b3" :v " "} {:p "c3" :v " "} {:p "d3" :v " "}
+{:p "e3" :v " "} {:p "f3" :v " "} {:p "g3" :v " "} {:p "h3" :v " "} 
+{:p "a2" :v "P"} {:p "b2" :v "P"} {:p "c2" :v "P"} {:p "d2" :v "P"}
+{:p "e2" :v "P"} {:p "f2" :v "P"} {:p "g2" :v "P"} {:p "h2" :v "P"} 
+{:p "a1" :v "R"} {:p "b1" :v "N"} {:p "c1" :v "B"} {:p "d1" :v "Q"}
+{:p "e1" :v "K"} {:p "f1" :v "B"} {:p "g1" :v "N"} {:p "h1" :v "R"} 
+])
+)
+
+(defn getPosPiece  
+   "same structure as posHasPiece, except modified to return the piece"
+   [dboard pos]
+   (let [square (first (filter #(= (:p %) pos) dboard))]
+      (square :v)
+   )
+)
+
+(defn printBoard  
+   "prints the chessboard to terminal in grid format. dboard must be a deref'd chessboard"
+   [dboard]
+   (do
+      (println (str "  -----------------"))
+      (loop [rank 8] 
+         (print (str rank " "))
+         (loop [file (int \a)] 
+            (let [boardloc (str (char file) rank)
+                  piece (getPosPiece dboard boardloc) ]
+               (print (str "|" piece))
+            )
+            (if (< file (int \h))
+               (recur (inc file))
+            )
+         )
+         (println (str "|"))
+         (if (> rank 1)
+            (recur (dec rank))
+         )
+      )
+      (println (str "  -----------------"))
+      (println (str "   a b c d e f g h "))
+   )
+)
+
+
+(def blacktaken (ref [])) ;; list containing taken black pieces
+(def whitetaken (ref [])) ;; list containing taken white pieces
+
+(def bestpos    (ref nil)) ;; best position - determined (recursively) by function findBestPos
+
+(defn addPieceToTaken 
+   "adds piece to (black or white) taken list"
+   [piece]
+   (if (> (int (first piece)) 96)      ;; piece is black
+      (dosync (alter blacktaken conj piece))
+      (dosync (alter whitetaken conj piece))
+   )
+)
+
+(defn boardHasPiece? [dboard piece] (some #(= (:v %) piece) dboard))
+(defn validPos?      [dboard pos]   (some #(= (:p %) pos)   dboard))
+
+;; gets value of :p in map - {:p "e1" :v "K"}
+(defn getSquarePos [{pos :p val :v}] pos)
+
+(defn posHasPiece?  
+   "if position has a chess piece or empty. can also be modified to return the piece"
+   [dboard pos]
+   (if (validPos? dboard pos) 
+      (let [square (first (filter #(= (:p %) pos) dboard))]
+         (if (not= (square :v) " ") 
+            true
+            false 
+         )
+      )
+      false
+   )
+)
+
+(def blackpieces ["k" "q" "b" "n" "r" "p"])
+(def whitepieces ["K" "Q" "B" "N" "R" "P"])
+
+(def validmoves [
+   {:piece "k" :moves `("N" "NE" "E" "SE" "S" "SW" "W" "NW")}
+   {:piece "q" :moves `("N" "NE" "E" "SE" "S" "SW" "W" "NW")}
+   {:piece "b" :moves `("NE" "SE" "SW" "NW")}
+   {:piece "n" :moves `("NNW" "NNE" "NWW" "NEE" "SSW" "SSE" "SWW" "SEE")}
+   {:piece "r" :moves `("N" "E" "S" "W")}
+   {:piece "p" :moves `("SE" "S" "SW")}
+   {:piece "K" :moves `("N" "NE" "E" "SE" "S" "SW" "W" "NW")}
+   {:piece "Q" :moves `("N" "NE" "E" "SE" "S" "SW" "W" "NW")}
+   {:piece "B" :moves `("NE" "SE" "SW" "NW")}
+   {:piece "N" :moves `("NNW" "NNE" "NWW" "NEE" "SSW" "SSE" "SWW" "SEE")}
+   {:piece "R" :moves `("N" "E" "S" "W")}
+   {:piece "P" :moves `("NE" "N" "NW")}
+   ]
+)
+
+(def sizemoves [
+   {:piece "k" :size 1}
+   {:piece "q" :size 7}
+   {:piece "b" :size 7}
+   {:piece "n" :size 1}
+   {:piece "r" :size 7}
+   {:piece "p" :size 1}
+   {:piece "K" :size 1}
+   {:piece "Q" :size 7}
+   {:piece "B" :size 7}
+   {:piece "N" :size 1}
+   {:piece "R" :size 7}
+   {:piece "P" :size 1}
+   ]
+)
+
+(defn isValidMove? 
+   "checks if dir is in list of a piece's valid moves"
+   [apiece dir]
+   (let [pieceinfo (first (filter #(= (:piece %) apiece) validmoves))
+         moveslist (pieceinfo :moves)]
+      (if (some #(= dir %) moveslist) 
+         true
+         false
+      )
+   )
+)
+
+(defn getMaxMoves 
+   "helper function to get the max # of moves for piece"
+   [pc]
+   ((first (filter #(= (:piece %) pc) sizemoves)) :size)
+)
+
+(defn nextPos 
+   "get pos + dir"
+   [pos dir]
+   (do
+      (let [file (int (first pos))
+            rank (int (second pos))]
+         (case dir
+               "N" (str (char file) (char (+ rank 1)))
+               "S" (str (char file) (char (- rank 1)))
+               "E" (str (char (+ file 1)) (char rank))
+               "W" (str (char (- file 1)) (char rank))
+               "NE" (str (char (+ file 1)) (char (+ rank 1)))
+               "NW" (str (char (- file 1)) (char (+ rank 1)))
+               "SE" (str (char (+ file 1)) (char (- rank 1)))
+               "SW" (str (char (- file 1)) (char (- rank 1)))
+               "NNE" (str (char (+ file 1)) (char (+ rank 2)))
+               "NNW" (str (char (- file 1)) (char (+ rank 2)))
+               "NEE" (str (char (+ file 2)) (char (+ rank 1)))
+               "NWW" (str (char (- file 2)) (char (+ rank 1)))
+               "SSE" (str (char (+ file 1)) (char (- rank 2)))
+               "SSW" (str (char (- file 1)) (char (- rank 2)))
+               "SEE" (str (char (+ file 2)) (char (- rank 1)))
+               "SWW" (str (char (- file 2)) (char (- rank 1)))
+               "s0"  ;; default value if no match
+         )
+      )
+   )
+)
+
+(defn inBounds? 
+   "if newpos is within board"
+   [newpos]
+   (let [file (first newpos)
+         rank (second newpos)]
+      (if (and (some #(= file %) [\a \b \c \d \e \f \g \h]) (some #(= rank %) [\1 \2 \3 \4 \5 \6 \7 \8]))
+         true
+         false
+      )
+   )
+)
+
+(defn samePiece? 
+   "Checks if two pieces are same color, returns true/false"
+   [piece1 piece2]
+   (do 
+      (if (and (some #(= % piece1) blackpieces) (some #(= % piece2) blackpieces)) 
+         true
+         (if (and (some #(= % piece1) whitepieces) (some #(= % piece2) whitepieces)) 
+            true
+            (if (and (some #(= % piece1) blackpieces) (some #(= % piece2) whitepieces)) 
+               false
+               (if (and (some #(= % piece1) whitepieces) (some #(= % piece2) blackpieces)) 
+                  false
+               )
+            )
+         )
+      )
+   )
+)   
+
+
+(defn findBestPos
+   "recursively finds best position for piece based on direction, move size, pieces in the way, board boundaries"
+   [dboard pos dir piece movesize]
+      (let [newpos (nextPos pos dir)]
+         (if (and (inBounds? newpos) (>= movesize 1))
+            (if (not (posHasPiece? dboard newpos))
+               (findBestPos dboard newpos dir piece (- movesize 1))
+               (let [newpiece (getPosPiece dboard newpos)]
+                  (if (samePiece? piece newpiece)            ;; lower case -> black piece
+                     (dosync (ref-set bestpos pos))
+                     (dosync (ref-set bestpos newpos))
+                  )
+               )
+            )
+            (dosync (ref-set bestpos pos))                   ;; (if movesize < 1)
+         )
+      )
+)
+      ;; if movesize (left) is > 0
+      ;;    get newPos
+      ;;    if inBounds?
+      ;;       if newpos is empty, 
+      ;;          *recurse* findBest to nextPos, movesize-1
+      ;;          else if nextPos has piece,
+      ;;             get piece @nextPos
+      ;;          else (if nextPos has opposing piece)
+      ;;             set bestPos to nextPos
+      ;;             else set bestPos to current pos
+      ;;    else (if not inBounds)
+      ;;       set bestPos to current pos
+
+(defn movePiece 
+   "moves a piece from pos to newpos - if possible"
+   [dboard pos dir movesize]
+   (if (and (posHasPiece? dboard pos) (isValidMove? (getPosPiece dboard pos) dir))  
+   ;; if there is a piece on pos (input error checking) and move/dir is valid for piece
+      (let [emptysq {:p pos :v " "}
+            piece (getPosPiece dboard pos)
+            maxmoves (getMaxMoves piece)]
+         (do
+            (findBestPos dboard pos dir piece (min movesize maxmoves))
+            (if (and (posHasPiece? dboard @bestpos) (not (samePiece? piece (getPosPiece dboard @bestpos))))
+            ;; if new pos has a piece, then add piece to taken list
+               (addPieceToTaken (getPosPiece dboard @bestpos))  ;; add piece to (black or white) taken list
+            )
+            (let [b1 (filterv #(not= (getSquarePos %) pos) dboard)
+                  b2 (filterv #(not= (getSquarePos %) @bestpos) b1)
+                  b3 (conj b2 {:p @bestpos :v piece})      ;; replace new pos with piece
+                  b4 (conj b3 {:p pos      :v " "  })]     ;; replace pos with emptysq
+               (dosync (ref-set ChessBoard b4))                ;; replace ChessBoard with updated dboard
+            )
+;;               set bestPos to nil
+            (dosync (ref-set bestpos nil))
+         )
+      )
+   )
+)
+
+(defn processInput 
+   [input]
+   (let [inputvec (split input #"\s")
+         pos (first inputvec)
+         dir (nth inputvec 1)]
+         (do
+            (if (> (count inputvec) 2)
+               (let [movesize (- (int (first (nth inputvec 2))) 48)]
+                  (movePiece @ChessBoard pos dir movesize)
+               )
+               (movePiece @ChessBoard pos dir 7)
+            )
+         )
+   )
+)
+
+(defn readMoves 
+   "1-reads moves [pos dir], 2-calls movePiece, 3-prints updated ChessBoard"
+   []
+   (do
+      (printBoard @ChessBoard)
+      (println "white taken: " @whitetaken)
+      (println "black taken: " @blacktaken)
+      (print "Input move (Q to quit): ")
+      (flush)
+      (loop []
+         (let [inputmove (read-line)] 
+            (if (= inputmove "Q")
+               "Bye"
+               (do
+                  (processInput inputmove)
+;;(println "---Passed here")
+                  (printBoard @ChessBoard)
+                  (println "white taken: " @whitetaken)
+                  (println "black taken: " @blacktaken)
+                  (print "Input move (Q to quit): ")
+                  (flush)
+                  (recur )
+               )
+            )
+         )
+      )
+   )
+)
+
+
+
+
+
+
